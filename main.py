@@ -176,6 +176,8 @@ def update_remnawave_template(uuid: str, name: str, template_json: dict) -> dict
         timeout=30,
         verify=SSL_VERIFY,
     )
+    if not resp.ok:
+        log.error("Remnawave PATCH failed %s: %s", resp.status_code, resp.text)
     resp.raise_for_status()
     log.info("Remnawave PATCH responded %s", resp.status_code)
     return resp.json()
@@ -208,6 +210,7 @@ def run_once():
     response = rw_data.get("response", rw_data)
     current_json = response.get("templateJson")
     template_name = response.get("name", "")
+    log.info("Template name: %r, templateJson type: %s", template_name, type(current_json).__name__)
 
     if configs_equal(xray, current_json):
         log.info("Configs are identical — no update needed")
