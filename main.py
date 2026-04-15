@@ -5,6 +5,7 @@ import sys
 import time
 
 import requests
+import urllib3
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,6 +22,17 @@ GITHUB_RAW_URL = os.environ.get(
     "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/refs/heads/main/HAPP/DEFAULT.JSON",
 )
 CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "300"))
+SSL_VERIFY = REMNAWAVE_API.startswith("https://")
+
+REMNAWAVE_HEADERS = {
+    "Accept": "application/json",
+    "Authorization": f"Bearer {REMNAWAVE_TOKEN}",
+}
+
+if not SSL_VERIFY:
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    REMNAWAVE_HEADERS["X-Forwarded-Proto"] = "https"
+    REMNAWAVE_HEADERS["X-Forwarded-For"] = "127.0.0.1"
 
 
 def fetch_happ_config(url: str) -> dict:
@@ -145,8 +157,9 @@ def get_remnawave_template(uuid: str) -> dict:
     log.info("Fetching Remnawave template: GET %s", url)
     resp = requests.get(
         url,
-        headers={"Authorization": f"Bearer {REMNAWAVE_TOKEN}"},
+        headers=REMNAWAVE_HEADERS,
         timeout=30,
+        verify=SSL_VERIFY,
     )
     resp.raise_for_status()
     log.info("Remnawave GET responded %s", resp.status_code)
@@ -158,12 +171,10 @@ def update_remnawave_template(uuid: str, name: str, template_json: dict) -> dict
     log.info("Updating Remnawave template: PATCH %s", url)
     resp = requests.patch(
         url,
-        headers={
-            "Authorization": f"Bearer {REMNAWAVE_TOKEN}",
-            "Content-Type": "application/json",
-        },
+        headers={**REMNAWAVE_HEADERS, "Content-Type": "application/json"},
         json={"uuid": uuid, "name": name, "templateJson": template_json},
         timeout=30,
+        verify=SSL_VERIFY,
     )
     resp.raise_for_status()
     log.info("Remnawave PATCH responded %s", resp.status_code)
