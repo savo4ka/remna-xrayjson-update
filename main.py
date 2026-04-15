@@ -166,16 +166,18 @@ def get_remnawave_template(uuid: str) -> dict:
     return resp.json()
 
 
-def update_remnawave_template(uuid: str, name: str, template_json: dict) -> dict:
+def update_remnawave_template(uuid: str, template_json: dict) -> dict:
     url = f"{REMNAWAVE_API}/api/subscription-templates"
     log.info("Updating Remnawave template: PATCH %s", url)
     resp = requests.patch(
         url,
         headers={**REMNAWAVE_HEADERS, "Content-Type": "application/json"},
-        json={"uuid": uuid, "name": name, "templateJson": template_json},
+        json={"uuid": uuid, "templateJson": template_json},
         timeout=30,
         verify=SSL_VERIFY,
     )
+    if not resp.ok:
+        log.error("Remnawave PATCH failed %s: %s", resp.status_code, resp.text)
     resp.raise_for_status()
     log.info("Remnawave PATCH responded %s", resp.status_code)
     return resp.json()
@@ -207,7 +209,6 @@ def run_once():
 
     response = rw_data.get("response", rw_data)
     current_json = response.get("templateJson")
-    template_name = response.get("name", "")
 
     if configs_equal(xray, current_json):
         log.info("Configs are identical — no update needed")
@@ -215,7 +216,7 @@ def run_once():
 
     log.info("Configs differ — updating Remnawave template")
     try:
-        update_remnawave_template(TEMPLATE_UUID, template_name, xray)
+        update_remnawave_template(TEMPLATE_UUID, xray)
         log.info("Template updated successfully")
     except Exception:
         log.exception("Failed to update Remnawave template")
