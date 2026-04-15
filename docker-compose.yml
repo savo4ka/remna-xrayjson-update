@@ -1,0 +1,7 @@
+services:
+  happ-sync:
+    build: .
+    container_name: happ-sync
+    restart: unless-stopped
+    env_file:
+      - .env
