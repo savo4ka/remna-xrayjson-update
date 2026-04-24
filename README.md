@@ -1,4 +1,4 @@
-# remna-xrayjson-update
+# rw-template-updater
 
 Микросервис для автоматической синхронизации шаблонов подписок в Remnawave с внешними источниками (GitHub raw-файлы и т.п.).
 
@@ -65,9 +65,9 @@ CLASH_RAW_URL=
 
 ```yaml
 services:
-  template-updater:
-    image: ghcr.io/savo4ka/remna-xrayjson-update:latest
-    container_name: template-updater
+  rw-template-updater:
+    image: ghcr.io/savo4ka/rw-template-updater:latest
+    container_name: rw-template-updater
     restart: unless-stopped
     env_file:
       - .env
@@ -89,9 +89,9 @@ REMNAWAVE_API=http://remnawave:3000
 
 ```yaml
 services:
-  template-updater:
-    image: ghcr.io/savo4ka/remna-xrayjson-update:latest
-    container_name: template-updater
+  rw-template-updater:
+    image: ghcr.io/savo4ka/rw-template-updater:latest
+    container_name: rw-template-updater
     restart: unless-stopped
     env_file:
       - .env
@@ -115,8 +115,8 @@ docker compose up -d
 ### Сборка из исходников
 
 ```bash
-git clone https://github.com/savo4ka/remna-xrayjson-update.git
-cd remna-xrayjson-update
+git clone https://github.com/savo4ka/rw-template-updater.git
+cd rw-template-updater
 cp .env.example .env
 # отредактируйте .env
 docker compose up -d --build
