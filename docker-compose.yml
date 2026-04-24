@@ -1,7 +1,15 @@
 services:
-  happ-sync:
+  template-updater:
     build: .
-    container_name: happ-sync
+    container_name: template-updater
     restart: unless-stopped
     env_file:
       - .env
+    networks:
+      - remnawave-network
+
+networks:
+  remnawave-network:
+    name: remnawave-network
+    driver: bridge
+    external: true
