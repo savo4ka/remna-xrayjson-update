@@ -1,235 +1,95 @@
-import json
 import logging
 import os
 import sys
 import time
 
-import requests
-import urllib3
+from remnawave_client import RemnawaveClient
+from templates.base import BaseTemplate
+from templates.clash import ClashTemplate
+from templates.mihomo import MihomoTemplate
+from templates.singbox import SingboxTemplate
+from templates.stash import StashTemplate
+from templates.xray_json import XrayJsonTemplate
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("happ-sync")
-
-TEMPLATE_UUID = os.environ["TEMPLATE_UUID"]
-REMNAWAVE_API = os.environ["REMNAWAVE_API"].rstrip("/")
-REMNAWAVE_TOKEN = os.environ["REMNAWAVE_TOKEN"]
-GITHUB_RAW_URL = os.environ.get(
-    "GITHUB_RAW_URL",
-    "https://raw.githubusercontent.com/hydraponique/roscomvpn-routing/refs/heads/main/HAPP/DEFAULT.JSON",
-)
-CHECK_INTERVAL = int(os.environ.get("CHECK_INTERVAL", "300"))
-SSL_VERIFY = REMNAWAVE_API.startswith("https://")
-
-REMNAWAVE_HEADERS = {
-    "Accept": "application/json",
-    "Authorization": f"Bearer {REMNAWAVE_TOKEN}",
-}
-
-if not SSL_VERIFY:
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    REMNAWAVE_HEADERS["X-Forwarded-Proto"] = "https"
-    REMNAWAVE_HEADERS["X-Forwarded-For"] = "127.0.0.1"
+log = logging.getLogger("template-updater")
 
 
-def fetch_happ_config(url: str) -> dict:
-    log.info("Fetching Happ config from GitHub: %s", url)
-    resp = requests.get(url, timeout=30)
-    resp.raise_for_status()
-    log.info("GitHub responded %s", resp.status_code)
-    return resp.json()
+def env_bool(name: str, default: str = "false") -> bool:
+    return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
 
 
-def happ_to_xray(happ: dict) -> dict:
-    remote_dns_domain = happ["RemoteDNSDomain"]
-    domestic_dns_domain = happ["DomesticDNSDomain"]
-    remote_dns_ip = happ["RemoteDNSIP"]
-    domestic_dns_ip = happ["DomesticDNSIP"]
-
-    direct_sites = happ.get("DirectSites", [])
-    direct_ip = happ.get("DirectIp", [])
-    proxy_sites = happ.get("ProxySites", [])
-    proxy_ip = happ.get("ProxyIp", [])
-    block_sites = happ.get("BlockSites", [])
-    block_ip = happ.get("BlockIp", [])
-    domain_strategy = happ.get("DomainStrategy", "IPIfNonMatch")
-
-    # --- DNS ---
-    dns_hosts = happ.get("DnsHosts", {})
-    dns_servers = [remote_dns_domain]
-    if proxy_sites:
-        dns_servers.append({"address": remote_dns_domain, "domains": list(proxy_sites)})
-    if direct_sites:
-        dns_servers.append({"address": domestic_dns_domain, "domains": list(direct_sites)})
-
-    # --- Routing rules ---
-    rules = [{"port": 53, "outboundTag": "dns-out"}]
-
-    route_order = happ.get("RouteOrder", "block-proxy-direct")
-    order_parts = route_order.split("-")
-
-    for part in order_parts:
-        if part == "block":
-            if block_sites:
-                rules.append({"domain": list(block_sites), "outboundTag": "block"})
-            if block_ip:
-                rules.append({"ip": list(block_ip), "outboundTag": "block"})
-        elif part == "proxy":
-            rules.append({"ip": [domestic_dns_ip], "outboundTag": "direct"})
-            rules.append({"ip": [remote_dns_ip], "outboundTag": "proxy"})
-            if proxy_sites:
-                rules.append({"domain": list(proxy_sites), "outboundTag": "proxy"})
-            if proxy_ip:
-                rules.append({"ip": list(proxy_ip), "outboundTag": "proxy"})
-        elif part == "direct":
-            if direct_sites:
-                rules.append({"domain": list(direct_sites), "outboundTag": "direct"})
-            if direct_ip:
-                rules.append({"ip": list(direct_ip), "outboundTag": "direct"})
-
-    return {
-        "dns": {
-            "hosts": dns_hosts,
-            "servers": dns_servers,
-            "queryStrategy": "UseIPv4",
-        },
-        "log": {"loglevel": "warning"},
-        "stats": {},
-        "policy": {
-            "levels": {
-                "8": {
-                    "connIdle": 300,
-                    "handshake": 4,
-                    "uplinkOnly": 1,
-                    "downlinkOnly": 1,
-                }
-            },
-            "system": {
-                "statsOutboundUplink": True,
-                "statsOutboundDownlink": True,
-            },
-        },
-        "routing": {
-            "rules": rules,
-            "domainStrategy": domain_strategy,
-        },
-        "inbounds": [
-            {
-                "tag": "socks",
-                "port": 10808,
-                "listen": "127.0.0.1",
-                "protocol": "socks",
-                "settings": {"udp": True, "auth": "noauth", "userLevel": 8},
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "quic", "tls"],
-                },
-            },
-            {
-                "tag": "http",
-                "port": 10809,
-                "listen": "127.0.0.1",
-                "protocol": "http",
-                "settings": {"userLevel": 8},
-                "sniffing": {
-                    "enabled": True,
-                    "destOverride": ["http", "quic", "tls"],
-                },
-            },
-        ],
-        "outbounds": [
-            {"tag": "direct", "protocol": "freedom"},
-            {"tag": "block", "protocol": "blackhole"},
-            {
-                "tag": "dns-out",
-                "protocol": "dns",
-                "proxySettings": {"tag": "proxy"},
-            },
-        ],
-    }
+def _register_simple(
+    templates: list[BaseTemplate],
+    client: RemnawaveClient,
+    flag: str,
+    cls: type[BaseTemplate],
+) -> None:
+    """Register a pass-through template that needs only UUID + URL."""
+    if not env_bool(flag):
+        return
+    uuid = os.environ.get(f"{flag}_UUID", "")
+    url = os.environ.get(f"{flag}_RAW_URL", "")
+    if uuid and url:
+        templates.append(cls(uuid=uuid, raw_url=url, client=client))
+    else:
+        log.warning("%s enabled but %s_UUID or %s_RAW_URL is empty", flag, flag, flag)
 
 
-def get_remnawave_template(uuid: str) -> dict:
-    url = f"{REMNAWAVE_API}/api/subscription-templates/{uuid}"
-    log.info("Fetching Remnawave template: GET %s", url)
-    resp = requests.get(
-        url,
-        headers=REMNAWAVE_HEADERS,
-        timeout=30,
-        verify=SSL_VERIFY,
-    )
-    resp.raise_for_status()
-    log.info("Remnawave GET responded %s", resp.status_code)
-    return resp.json()
+def build_templates(client: RemnawaveClient) -> list[BaseTemplate]:
+    templates: list[BaseTemplate] = []
+
+    # XRAY_JSON has an extra CONVERT_FROM_HAPP flag, so it's registered by hand.
+    if env_bool("XRAY_JSON"):
+        uuid = os.environ.get("XRAY_JSON_UUID", "")
+        url = os.environ.get("XRAY_JSON_RAW_URL", "")
+        convert_from_happ = env_bool("CONVERT_FROM_HAPP", "false")
+        if uuid and url:
+            templates.append(
+                XrayJsonTemplate(
+                    uuid=uuid,
+                    raw_url=url,
+                    client=client,
+                    convert_from_happ=convert_from_happ,
+                )
+            )
+        else:
+            log.warning("XRAY_JSON enabled but XRAY_JSON_UUID or XRAY_JSON_RAW_URL is empty")
+
+    _register_simple(templates, client, "SINGBOX", SingboxTemplate)
+    _register_simple(templates, client, "MIHOMO", MihomoTemplate)
+    _register_simple(templates, client, "STASH", StashTemplate)
+    _register_simple(templates, client, "CLASH", ClashTemplate)
+
+    return templates
 
 
-def update_remnawave_template(uuid: str, template_json: dict) -> dict:
-    url = f"{REMNAWAVE_API}/api/subscription-templates"
-    log.info("Updating Remnawave template: PATCH %s", url)
-    resp = requests.patch(
-        url,
-        headers={**REMNAWAVE_HEADERS, "Content-Type": "application/json"},
-        json={"uuid": uuid, "templateJson": template_json},
-        timeout=30,
-        verify=SSL_VERIFY,
-    )
-    if not resp.ok:
-        log.error("Remnawave PATCH failed %s: %s", resp.status_code, resp.text)
-    resp.raise_for_status()
-    log.info("Remnawave PATCH responded %s", resp.status_code)
-    return resp.json()
+def main() -> None:
+    api_url = os.environ["REMNAWAVE_API"].rstrip("/")
+    token = os.environ["REMNAWAVE_TOKEN"]
+    interval = int(os.environ.get("CHECK_INTERVAL", "300"))
 
+    client = RemnawaveClient(api_url=api_url, token=token)
+    templates = build_templates(client)
 
-def configs_equal(a: dict, b: dict) -> bool:
-    return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
-
-
-def run_once():
-    try:
-        happ = fetch_happ_config(GITHUB_RAW_URL)
-    except Exception:
-        log.exception("Failed to fetch Happ config from GitHub")
+    if not templates:
+        log.warning("No templates enabled — nothing to sync")
         return
 
-    try:
-        xray = happ_to_xray(happ)
-        log.info("Happ -> XRAY_JSON conversion successful")
-    except Exception:
-        log.exception("Failed to convert Happ config to XRAY_JSON")
-        return
-
-    try:
-        rw_data = get_remnawave_template(TEMPLATE_UUID)
-    except Exception:
-        log.exception("Failed to fetch Remnawave template")
-        return
-
-    response = rw_data.get("response", rw_data)
-    current_json = response.get("templateJson")
-
-    if configs_equal(xray, current_json):
-        log.info("Configs are identical — no update needed")
-        return
-
-    log.info("Configs differ — updating Remnawave template")
-    try:
-        update_remnawave_template(TEMPLATE_UUID, xray)
-        log.info("Template updated successfully")
-    except Exception:
-        log.exception("Failed to update Remnawave template")
-
-
-def main():
     log.info(
-        "Starting happ-sync (interval=%ds, template=%s)", CHECK_INTERVAL, TEMPLATE_UUID
+        "Starting sync templates (interval=%ds, enabled=%s)",
+        interval,
+        [t.name for t in templates],
     )
     while True:
-        run_once()
-        log.info("Sleeping %d seconds...", CHECK_INTERVAL)
-        time.sleep(CHECK_INTERVAL)
+        for template in templates:
+            template.run()
+        log.info("Sleeping %d seconds...", interval)
+        time.sleep(interval)
 
 
 if __name__ == "__main__":
