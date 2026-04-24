@@ -16,7 +16,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)],
 )
-log = logging.getLogger("template-updater")
+log = logging.getLogger("rw-template-updater")
 
 
 def env_bool(name: str, default: str = "false") -> bool:
